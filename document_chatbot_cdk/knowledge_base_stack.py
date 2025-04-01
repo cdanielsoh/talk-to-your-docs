@@ -425,7 +425,7 @@ class KnowledgebaseStack(Stack):
             knowledge_base_id=knowledge_base.attr_knowledge_base_id,
             name='dlb-document-datasource',
             description='Data source for documents',
-            data_deletion_policy='DELETE',
+            data_deletion_policy='RETAIN',
             vector_ingestion_configuration=bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
                 chunking_configuration=bedrock.CfnDataSource.ChunkingConfigurationProperty(
                     chunking_strategy='HIERARCHICAL',
@@ -446,7 +446,7 @@ class KnowledgebaseStack(Stack):
                     bedrock_foundation_model_configuration=bedrock.CfnDataSource.BedrockFoundationModelConfigurationProperty(
                         model_arn=f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
                         parsing_modality="MULTIMODAL"
-                    )
+                    )g
                 )
             )
         )
@@ -483,7 +483,6 @@ class KnowledgebaseStack(Stack):
             service_token=Provider(
                 self, 'KBSyncProvider',
                 on_event_handler=kb_sync_lambda,
-                timeout=Duration.minutes(10)
             ).service_token
         )
 
