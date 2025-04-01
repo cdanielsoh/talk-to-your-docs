@@ -1,1 +1,0 @@
-export const API_ENDPOINT = 'wss://0wzc30524k.execute-api.us-west-2.amazonaws.com/prod';
