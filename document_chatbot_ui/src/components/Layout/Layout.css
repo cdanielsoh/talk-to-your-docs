@@ -1,0 +1,112 @@
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.chat-panel {
+  flex: 1;
+  height: 100%;
+  border-right: 1px solid var(--border-color);
+  max-width: 50%;
+  box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+  background-color: white;
+}
+
+.document-panel {
+  flex: 1;
+  height: 100%;
+  overflow: auto;
+  background-color: var(--background-color);
+}
+
+.connecting-container, .error-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100%;
+}
+
+.document-navigation {
+  padding: 10px;
+  background-color: white;
+  border-bottom: 1px solid var(--border-color);
+  z-index: 1;
+}
+
+.document-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Make DocumentViewer take remaining space */
+.document-panel > div:last-child {
+  flex: 1;
+  overflow: auto;
+}
+
+.app-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.selector-container {
+  padding: 10px;
+  background-color: white;
+  border-bottom: 1px solid var(--border-color);
+  z-index: 10;
+}
+
+.app-container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Responsive styles for mobile */
+@media (max-width: 768px) {
+  .selector-container .MuiGrid-container {
+    flex-direction: column;
+  }
+
+  .selector-container .MuiGrid-item {
+    width: 100%;
+    max-width: 100%;
+    flex-basis: 100%;
+  }
+}
+
+/* Responsive design for mobile */
+@media (max-width: 768px) {
+  .app-container {
+    flex-direction: column;
+  }
+
+  .chat-panel {
+    max-width: 100%;
+    height: 50vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .document-panel {
+    height: 50vh;
+  }
+}
+
+.document-navigation {
+  background-color: white;
+  border-top: 1px solid var(--border-color);
+  padding: 8px 0;
+  margin-top: auto; /* Push to bottom if flex layout */
+}
+
+/* Make buttons more visible */
+.MuiButtonGroup-root .MuiButton-root {
+  min-width: 64px;
+}
