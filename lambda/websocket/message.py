@@ -6,6 +6,18 @@ from botocore.exceptions import BotoCoreError, ClientError
 dynamodb = boto3.resource('dynamodb')
 table = dynamodb.Table(os.environ['CONNECTIONS_TABLE'])
 
+# Default model if none specified
+DEFAULT_MODEL = 'anthropic.claude-3-sonnet-20240229-v1:0'
+
+# Map of allowed models - this is for security to prevent arbitrary model injection
+ALLOWED_MODELS = {
+    'amazon.nova-pro-v1:0': 'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0',
+    'amazon.nova-lite-v1:0': 'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-lite-v1:0',
+    'anthropic.claude-3-7-sonnet-20250219-v1:0': 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-7-sonnet-20250219-v1:0',
+    'anthropic.claude-3-5-sonnet-20241022-v2:0': 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0',
+    'anthropic.claude-3-5-haiku-20241022-v1:0': 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0'
+}
+
 
 def handler(event, context):
     # Get connection ID
@@ -14,6 +26,22 @@ def handler(event, context):
     # Parse message from client
     body = json.loads(event['body'])
     query = body.get('query', '')
+
+    # Get model ID from request
+    model_id = body.get('modelArn', DEFAULT_MODEL)
+
+    # Security check: only use model if it's in our allowed list
+    if model_id not in ALLOWED_MODELS:
+        print(f"WARNING: Requested model {model_id} not in allowed list, using default")
+        model_id = DEFAULT_MODEL
+
+    # Get the model ARN
+    model_arn = ALLOWED_MODELS[model_id]
+    print(f"Using model: {model_id} with ARN: {model_arn}")
+
+    # Get search method if provided
+    search_method = body.get('searchMethod', 'opensearch')
+    print(f"Using search method: {search_method}")
 
     # Get endpoint URL for sending messages
     domain = event['requestContext']['domainName']
@@ -32,7 +60,6 @@ def handler(event, context):
 
     # Create Bedrock client
     client = boto3.client('bedrock-agent-runtime', region_name=region)
-    model_arn = 'arn:aws:bedrock:us-west-2::foundation-model/anthropic.claude-3-sonnet-20240229-v1:0'
 
     try:
         # Initiate streaming response from Bedrock
