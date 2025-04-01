@@ -13,7 +13,7 @@ def handler(event, context):
             ds_id = os.environ['DATA_SOURCE_ID']
             region = os.environ['REGION']
 
-            bedrock = boto3.client('bedrock', region_name=region)
+            bedrock = boto3.client('bedrock-agent', region_name=region)
 
             # Start ingestion job
             response = bedrock.start_ingestion_job(
