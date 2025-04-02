@@ -21,8 +21,12 @@ import json
 
 
 class BedrockChatbotStack(cdk.Stack):
-    def __init__(self, scope: Construct, id: str, kb_id, kb_document_url, **kwargs):
+    def __init__(self, scope: Construct, id: str, kb_id, kb_document_url, kb_outputs, **kwargs):
         super().__init__(scope, id, **kwargs)
+
+        # Extract OpenSearch details from knowledge base outputs
+        opensearch_endpoint = kb_outputs.get("opensearch_endpoint")
+        opensearch_index = kb_outputs.get("index_name")
 
         # Create DynamoDB table to store WebSocket connections
         connections_table = dynamodb.Table(
@@ -56,18 +60,31 @@ class BedrockChatbotStack(cdk.Stack):
             },
         )
 
-        # Create Bedrock Lambda function
+        # Create Lambda layer for OpenSearch integration
+        opensearch_layer = lambda_.LayerVersion(
+            self, 'OpenSearchLayer',
+            code=lambda_.Code.from_asset('layers/opensearch.zip'),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_9],
+            description='Layer containing the OpenSearch SDK'
+        )
+
+        # Create Bedrock Lambda function with both KnowledgeBase and OpenSearch access
         bedrock_function = lambda_.Function(
             self, 'BedrockLambdaFunction',
             runtime=lambda_.Runtime.PYTHON_3_9,
             handler='message.handler',
             code=lambda_.Code.from_asset('lambda/websocket'),
+            layers=[opensearch_layer],
             environment={
                 'KNOWLEDGE_BASE_ID': kb_id,
                 'REGION': 'us-west-2',
                 'CONNECTIONS_TABLE': connections_table.table_name,
+                'OPENSEARCH_ENDPOINT': opensearch_endpoint,
+                'OPENSEARCH_INDEX': opensearch_index,
+                'RESPONSE_LANGUAGE': 'Korean'
             },
-            timeout=Duration.minutes(5)
+            timeout=Duration.minutes(5),
+            memory_size=1024
         )
 
         # Grant permissions to Lambda functions
@@ -80,8 +97,16 @@ class BedrockChatbotStack(cdk.Stack):
             actions=[
                 'bedrock:RetrieveAndGenerate',
                 'bedrock:Retrieve',
-                'bedrock:InvokeModelWithResponseStream'
+                'bedrock:InvokeModelWithResponseStream',
+                'bedrock:InvokeModel',
+                'bedrock:Rerank'
             ],
+            resources=['*'],
+        ))
+
+        # Grant OpenSearch Serverless permissions
+        bedrock_function.add_to_role_policy(iam.PolicyStatement(
+            actions=['aoss:APIAccessAll'],
             resources=['*'],
         ))
 
@@ -195,8 +220,6 @@ class BedrockChatbotStack(cdk.Stack):
                 }
             )
         )
-
-        # Add to your BedrockChatbotStack
 
         # Lambda to update config.json with actual values
         update_config_lambda = lambda_.Function(

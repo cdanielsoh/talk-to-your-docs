@@ -446,7 +446,7 @@ class KnowledgebaseStack(Stack):
                     bedrock_foundation_model_configuration=bedrock.CfnDataSource.BedrockFoundationModelConfigurationProperty(
                         model_arn=f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3-haiku-20240307-v1:0",
                         parsing_modality="MULTIMODAL"
-                    )g
+                    )
                 )
             )
         )
