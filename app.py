@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 import os
-
 import aws_cdk as cdk
-
-from document_chatbot_cdk.bedrock_chatbot_cdk_stack import BedrockChatbotStack
 from document_chatbot_cdk.knowledge_base_stack import KnowledgebaseStack
-
+from document_chatbot_cdk.bedrock_chatbot_cdk_stack import BedrockChatbotStack
 
 app = cdk.App()
 
-# Create the knowledge base stack first
-kb_stack = KnowledgebaseStack(app, "KnowledgebaseStack")
+# First deploy the Knowledge Base stack
+kb_stack = KnowledgebaseStack(app, "DocumentChatbotKnowledgeBaseStack", use_parallel_processing=False)
 
-# Create the chatbot stack that depends on the knowledge base stack
-chatbot_stack = BedrockChatbotStack(
+# Then deploy the Chatbot Stack with the Knowledge Base ID and document URL
+BedrockChatbotStack(
     app,
-    "BedrockChatbotStack",
+    "DocumentChatbotWebStack",
     kb_id=kb_stack.outputs["knowledgebase_id"],
-    kb_document_url=kb_stack.outputs["document_cloudfront_url"]  # Pass this through
+    kb_document_url=kb_stack.outputs["document_cloudfront_url"],
+    kb_outputs=kb_stack.outputs
 )
-
-# Add dependency to ensure proper deployment order
-chatbot_stack.add_dependency(kb_stack)
 
 app.synth()

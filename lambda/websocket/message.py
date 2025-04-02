@@ -273,7 +273,6 @@ def handle_contextual_retrieval(query, model_id, connection_id, apigw_management
                     sources.append({
                         'sourceId': str(citation_num),
                         'sourceUrl': source_url,
-                        'title': metadata.get('title', f"Source {citation_num}")
                     })
 
         # Set up system prompt
@@ -314,7 +313,6 @@ def handle_contextual_retrieval(query, model_id, connection_id, apigw_management
                 'type': 'citation',
                 'sourceId': source['sourceId'],
                 'sourceUrl': source['sourceUrl'],
-                'title': source.get('title', '')
             })
 
         # Process streaming response

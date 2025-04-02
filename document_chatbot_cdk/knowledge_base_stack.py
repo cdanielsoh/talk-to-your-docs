@@ -12,7 +12,9 @@ from aws_cdk import (
     aws_cloudfront as cloudfront,
     aws_cloudfront_origins as origins,
     aws_iam as iam,
-    CfnDeletionPolicy
+    CfnDeletionPolicy,
+    aws_sqs as sqs,
+    aws_lambda_event_sources as lambda_event_sources
 )
 from aws_cdk.custom_resources import Provider
 from constructs import Construct
@@ -29,15 +31,10 @@ class KnowledgebaseStackOutputs(TypedDict):
 
 
 class KnowledgebaseStack(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, use_parallel_processing, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Create S3 bucket for storing CSV data
-        text_chunk_bucket = s3.Bucket(
-            self, "ContextualRetrievalBucket",
-            removal_policy=RemovalPolicy.DESTROY,
-            auto_delete_objects=True
-        )
+        self.use_parallel_processing = use_parallel_processing
 
         document_bucket = s3.Bucket(
             self, "DocumentBucket",
@@ -49,13 +46,6 @@ class KnowledgebaseStack(Stack):
             self, "SupplementalDataBucket",
             removal_policy=RemovalPolicy.DESTROY,
             auto_delete_objects=True
-        )
-
-        # Upload CSV data to S3 bucket
-        text_chunk_data_upload = s3deploy.BucketDeployment(
-            self, "DeployTextChunksData",
-            sources=[s3deploy.Source.asset("./data/text_chunks")],
-            destination_bucket=text_chunk_bucket
         )
 
         document_data_upload = s3deploy.BucketDeployment(
@@ -116,9 +106,8 @@ class KnowledgebaseStack(Stack):
 
         # Define a valid collection name
         collection_name = f"collection-{self.account}"
-        contextual_retrieval_index_name = "text_chunks"
+        contextual_retrieval_index_name = "contextual_retrieval_text"
         knowledgebase_index_name = "knowledgebase"
-
 
         # Lambda role with necessary permissions (moved earlier for policy references)
         lambda_role = iam.Role(
@@ -151,7 +140,8 @@ class KnowledgebaseStack(Stack):
                     "bedrock:GetFoundationModel"  # Optional for model details
                 ],
                 resources=[
-                    "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0"
+                    "arn:aws:bedrock:*::foundation-model/amazon.titan-embed-text-v2:0",
+                    "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-haiku-20241022-v1:0",
                 ]
             )
         )
@@ -244,49 +234,163 @@ class KnowledgebaseStack(Stack):
             description="Layer containing the requests module"
         )
 
-        # Grant S3 access
-        text_chunk_bucket.grant_read(lambda_role)
+        pdfplumber_layer = lambda_.LayerVersion(
+            self, "PdfPlumberLayer",
+            code=lambda_.Code.from_asset("layers/pdfplumber_layer.zip"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            description="Layer containing pdfplumber and dependencies"
+        )
 
-        # Create Lambda function to create index and ingest data
-        ingest_lambda = lambda_.Function(
-            self, "IngestDataFunction",
+        # Grant S3 access
+        document_bucket.grant_read(lambda_role)
+
+        # Create index initializer Lambda
+        index_initializer = lambda_.Function(
+            self, "IndexInitializerFunction",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="index.handler",
+            handler="index_initializer.handler",
             code=lambda_.Code.from_asset("./lambda/knowledge_base"),
             environment={
                 "COLLECTION_ENDPOINT": f"{collection.attr_collection_endpoint}",
-                "DATA_BUCKET": text_chunk_bucket.bucket_name,
                 "CR_INDEX_NAME": contextual_retrieval_index_name,
                 "KB_INDEX_NAME": knowledgebase_index_name,
                 "REGION": self.region
             },
             timeout=Duration.minutes(5),
             layers=[requests_layer],
-            role=lambda_role
+            role=lambda_role  # Use the same role as other Lambdas
         )
 
         # Ensure Lambda waits for access policy to be created
-        ingest_lambda.node.add_dependency(data_access_policy)
+        index_initializer.node.add_dependency(data_access_policy)
+        index_initializer.node.add_dependency(collection)
 
-        # Custom resource to trigger Lambda only after collection is fully ready
-        custom_resource = CustomResource(
-            self, "IngestTrigger",
+        # Create a custom resource that triggers the index initializer
+        index_init_trigger = CustomResource(
+            self, "IndexInitTrigger",
             service_token=Provider(
-                self, "IngestProvider",
-                on_event_handler=ingest_lambda
+                self, "IndexInitProvider",
+                on_event_handler=index_initializer
             ).service_token,
             properties={
                 "Timestamp": datetime.now().isoformat()  # Force update on each deployment
             }
         )
 
-        custom_resource.node.add_dependency(collection)
-        custom_resource.node.add_dependency(data_access_policy)
-        custom_resource.node.add_dependency(text_chunk_data_upload)
+        # Add dependencies
+        index_init_trigger.node.add_dependency(collection)
+        index_init_trigger.node.add_dependency(data_access_policy)
+        index_init_trigger.node.add_dependency(document_data_upload)
+
+        if self.use_parallel_processing:
+
+            pdf_processing_queue = sqs.Queue(
+                self, "PDFProcessingQueue",
+                visibility_timeout=Duration.minutes(30),
+                retention_period=Duration.minutes(60)
+            )
+
+            queue_initiator = lambda_.Function(
+                self, "QueueInitiatorFunction",
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                handler="queue_initiator.handler",
+                code=lambda_.Code.from_asset("./lambda/knowledge_base"),
+                environment={
+                    "PDF_BUCKET": document_bucket.bucket_name,
+                    "SQS_QUEUE_URL": pdf_processing_queue.queue_url
+                },
+                timeout=Duration.minutes(5)
+            )
+
+            document_bucket.grant_read(queue_initiator)
+            pdf_processing_queue.grant_send_messages(queue_initiator)
+
+            # Create a custom resource that triggers the queue initiator
+            queue_trigger = CustomResource(
+                self, "QueueInitiatorTrigger",
+                service_token=Provider(
+                    self, "QueueInitiatorProvider",
+                    on_event_handler=queue_initiator
+                ).service_token,
+                properties={
+                    "Timestamp": datetime.now().isoformat()  # Force update on each deployment
+                }
+            )
+
+            # Add dependencies
+            queue_trigger.node.add_dependency(index_init_trigger)
+            queue_trigger.node.add_dependency(document_data_upload)
+            queue_trigger.node.add_dependency(pdf_processing_queue)
+            queue_trigger.node.add_dependency(collection)
+
+            # Create the document processor Lambda
+            doc_processor = lambda_.Function(
+                self, "DocumentProcessorFunction",
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                handler="document_processor.handler",
+                code=lambda_.Code.from_asset("./lambda/knowledge_base"),
+                environment={
+                    "COLLECTION_ENDPOINT": f"{collection.attr_collection_endpoint}",
+                    "CR_INDEX_NAME": contextual_retrieval_index_name,
+                    "KB_INDEX_NAME": knowledgebase_index_name,
+                    "REGION": self.region
+                },
+                timeout=Duration.minutes(15),  # Maximum Lambda timeout
+                memory_size=2048,
+                layers=[requests_layer, pdfplumber_layer],
+                role=lambda_role
+            )
+
+            # Add SQS as event source
+            doc_processor.add_event_source(
+                lambda_event_sources.SqsEventSource(pdf_processing_queue,
+                    batch_size=1  # Process one document at a time
+                )
+            )
+
+            # Ensure Lambda waits for access policy to be created
+            doc_processor.node.add_dependency(data_access_policy)
+
+            # Grant S3 access
+            document_bucket.grant_read(doc_processor)
+
+        else:
+            sequential_processor = lambda_.Function(
+                self, "SequentialProcessorFunction",
+                runtime=lambda_.Runtime.PYTHON_3_12,
+                handler="sequential_processor.handler",
+                code=lambda_.Code.from_asset("./lambda/knowledge_base"),
+                environment={
+                    "COLLECTION_ENDPOINT": f"{collection.attr_collection_endpoint}",
+                    "DATA_BUCKET": document_bucket.bucket_name,
+                    "CR_INDEX_NAME": contextual_retrieval_index_name,
+                    "REGION": self.region
+                },
+                timeout=Duration.minutes(15),
+                memory_size=2048,
+                layers=[requests_layer, pdfplumber_layer],
+                role=lambda_role
+            )
+
+            document_bucket.grant_read(sequential_processor)
+
+            sequential_trigger = CustomResource(
+                self, "SequentialProcessorTrigger",
+                service_token=Provider(
+                    self, "SequentialProvider",
+                    on_event_handler=sequential_processor
+                ).service_token,
+                properties={
+                    "Timestamp": datetime.now().isoformat()
+                }
+            )
+
+            sequential_trigger.node.add_dependency(index_init_trigger)
+            sequential_trigger.node.add_dependency(document_data_upload)
 
         # Create IAM role for Bedrock Knowledge Base
         knowledge_base_role = iam.Role(
-            self, 'DlbKnowledgeBaseRole',
+            self, 'KnowledgeBaseRole',
             assumed_by=iam.ServicePrincipal('bedrock.amazonaws.com'),
         )
 
@@ -299,8 +403,6 @@ class KnowledgebaseStack(Stack):
                 's3:DeleteObject'
             ],
             resources=[
-                text_chunk_bucket.bucket_arn,
-                f'{text_chunk_bucket.bucket_arn}/*',
                 document_bucket.bucket_arn,
                 f'{document_bucket.bucket_arn}/*',
                 supplemental_data_bucket.bucket_arn,
@@ -326,8 +428,8 @@ class KnowledgebaseStack(Stack):
 
         # Create Data Access Policy for Bedrock Knowledge Base
         bedrock_data_access_policy = opensearchserverless.CfnAccessPolicy(
-            self, 'DlbBedrockDataAccessPolicy',
-            name='dlb-bedrock-access-policy',
+            self, 'BedrockDataAccessPolicy',
+            name='bedrock-access-policy',
             type='data',
             description='Data access policy for development',
             policy=json.dumps([
@@ -360,8 +462,7 @@ class KnowledgebaseStack(Stack):
                     ],
                     'Principal': [
                         knowledge_base_role.role_arn,
-                        ingest_lambda.role.role_arn,
-                        # oss_provider_role.role_arn,
+                        index_initializer.role.role_arn,
                         f'arn:aws:iam::{self.account}:root'
                     ],
                     'Description': 'Combined access policy for both collection and index operations'
@@ -410,12 +511,14 @@ class KnowledgebaseStack(Stack):
         )
 
         # Add dependency to ensure index exists before Knowledge Base creation
-        knowledge_base.node.add_dependency(custom_resource)
-        knowledge_base.node.add_dependency(document_bucket)
+        knowledge_base.node.add_dependency(document_data_upload)
+        knowledge_base.node.add_dependency(index_init_trigger)
+        knowledge_base.node.add_dependency(index_initializer)
+        knowledge_base.node.add_dependency(bedrock_data_access_policy)
         knowledge_base.cfn_options.deletion_policy = CfnDeletionPolicy.DELETE
 
         data_source = bedrock.CfnDataSource(
-            self, 'DlbBedrockDataSource',
+            self, 'BedrockDataSource',
             data_source_configuration=bedrock.CfnDataSource.DataSourceConfigurationProperty(
                 s3_configuration=bedrock.CfnDataSource.S3DataSourceConfigurationProperty(
                     bucket_arn=document_bucket.bucket_arn,
@@ -423,7 +526,7 @@ class KnowledgebaseStack(Stack):
                 type='S3'
             ),
             knowledge_base_id=knowledge_base.attr_knowledge_base_id,
-            name='dlb-document-datasource',
+            name='document-datasource',
             description='Data source for documents',
             data_deletion_policy='RETAIN',
             vector_ingestion_configuration=bedrock.CfnDataSource.VectorIngestionConfigurationProperty(
@@ -499,7 +602,7 @@ class KnowledgebaseStack(Stack):
 
         # Output the collection endpoint and bucket name
         CfnOutput(self, "CollectionEndpoint", value=collection.attr_collection_endpoint)
-        CfnOutput(self, "DataBucketName", value=text_chunk_bucket.bucket_name)
+        CfnOutput(self, "DataBucketName", value=document_bucket.bucket_name)
         CfnOutput(self, "DashboardsURL", value=f"https://{collection.attr_dashboard_endpoint}/_dashboards/")
         CfnOutput(self, "KnowledgeBaseId", value=knowledge_base.attr_knowledge_base_id)
         CfnOutput(
