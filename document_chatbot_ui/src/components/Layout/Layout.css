@@ -1,6 +1,6 @@
 .app-container {
   display: flex;
-  height: 100vh;
+  height: calc(100vh - 64px); /* Account for AppBar height */
   width: 100%;
   overflow: hidden;
 }
@@ -19,6 +19,8 @@
   height: 100%;
   overflow: auto;
   background-color: var(--background-color);
+  display: flex;
+  flex-direction: column;
 }
 
 .connecting-container, .error-container {
@@ -37,11 +39,6 @@
   z-index: 1;
 }
 
-.document-panel {
-  display: flex;
-  flex-direction: column;
-}
-
 /* Make DocumentViewer take remaining space */
 .document-panel > div:last-child {
   flex: 1;
@@ -55,33 +52,7 @@
   overflow: hidden;
 }
 
-.selector-container {
-  padding: 10px;
-  background-color: white;
-  border-bottom: 1px solid var(--border-color);
-  z-index: 10;
-}
-
-.app-container {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
 /* Responsive styles for mobile */
-@media (max-width: 768px) {
-  .selector-container .MuiGrid-container {
-    flex-direction: column;
-  }
-
-  .selector-container .MuiGrid-item {
-    width: 100%;
-    max-width: 100%;
-    flex-basis: 100%;
-  }
-}
-
-/* Responsive design for mobile */
 @media (max-width: 768px) {
   .app-container {
     flex-direction: column;
@@ -97,13 +68,62 @@
   .document-panel {
     height: 50vh;
   }
+
+  .document-navigation {
+    display: none; /* Hide the navigation on mobile, we'll use the one in DocumentViewer */
+  }
+
+  /* For mobile, ensure buttons are big enough for touch */
+  .MuiButtonGroup-root .MuiButton-root {
+    padding: 6px 12px;
+  }
 }
 
+/* Sidebar transition styles */
+.sidebar-shift {
+  transition: margin-left 0.3s ease;
+}
+
+/* Document upload styles */
+.upload-dropzone {
+  border: 2px dashed #ccc;
+  border-radius: 4px;
+  padding: 20px;
+  text-align: center;
+  background-color: #fafafa;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.upload-dropzone:hover {
+  border-color: var(--primary-color);
+  background-color: rgba(37, 99, 235, 0.05);
+}
+
+.status-chip {
+  margin-left: 8px;
+  font-size: 0.75rem;
+}
+
+/* Document list item styles */
+.document-list-item {
+  transition: background-color 0.2s ease;
+}
+
+.document-list-item:hover {
+  background-color: rgba(37, 99, 235, 0.05);
+}
+
+.processing-document {
+  background-color: rgba(255, 152, 0, 0.08);
+}
+
+/* Document navigation footer */
 .document-navigation {
   background-color: white;
   border-top: 1px solid var(--border-color);
   padding: 8px 0;
-  margin-top: auto; /* Push to bottom if flex layout */
+  margin-top: auto; /* Push to bottom */
 }
 
 /* Make buttons more visible */

@@ -140,7 +140,12 @@ class DocumentProcessor:
         try:
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page in pdf.pages:
-                    text = page.extract_text()
+                    text = page.extract_text(
+                        x_tolerance=1,
+                        layout=True,
+                        keep_blank_chars=True,
+                        use_text_flow=False
+                    )
                     if text:
                         # Clean and normalize text
                         text = re.sub(r'\s+', ' ', text).strip()
@@ -151,9 +156,8 @@ class DocumentProcessor:
             return ""
 
     def _create_segments(self, text, document_name):
-        """Split text into semantic segments at natural boundaries"""
+        """Split text into semantic segments at natural boundaries with proper overlap"""
         segments = []
-
         # Split at sentence boundaries
         sentences = re.split(r'(?<=[.!?])\s+', text)
         current_segment = ""
@@ -169,12 +173,19 @@ class DocumentProcessor:
                     "position": segment_id
                 })
 
-                # Start new segment with overlap
-                overlap_text = current_segment.split(".")[-1] if "." in current_segment else ""
-                current_segment = overlap_text + " " + sentence
+                # Create overlap using the last 1-3 sentences (adjust as needed)
+                # This ensures meaningful overlap between segments
+                overlap_size = min(3, len(current_segment.split('. ')))
+                overlap_sentences = '. '.join(current_segment.split('. ')[-overlap_size:])
+
+                # Start new segment with the overlap text
+                current_segment = overlap_sentences + " " + sentence
             else:
                 # Add to current segment
-                current_segment += " " + sentence
+                if current_segment:
+                    current_segment += " " + sentence
+                else:
+                    current_segment = sentence
 
         # Add the last segment if not empty
         if current_segment.strip():
@@ -192,26 +203,27 @@ class DocumentProcessor:
         enhanced_segments = []
 
         system_message = {"text": """
-        You are a document context specialist. Your task is to briefly describe how a text segment 
+        You are a document context specialist. Your task is to briefly describe how a text chunk 
         fits within a larger document. Provide 2-3 sentences that:
         1. Identify the key information in this segment
         2. Explain how this segment relates to the broader content
         Be concise and specific.
-        Answer in Korean.
+        Provide you answer in the source language.
         """}
 
         for segment in segments:
             try:
                 user_message = {"role": "user", "content": [{"text": f"""
                 <document>
-                {full_document}... [document continues]
+                {full_document}
                 </document>
 
-                <segment>
+                <chunk>
                 {segment["content"]}
-                </segment>
+                </chunk>
 
-                Describe how this segment fits into the broader context.
+                Please give a short succinct context to situate this chunk within the overall document for the purposes of improving search retrieval of the chunk.
+                Answer only with the succinct context and nothing else.
                 """}]}
 
                 response = self.bedrock_client.converse(

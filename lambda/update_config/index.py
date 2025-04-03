@@ -16,6 +16,7 @@ def handler(event, context):
             websocket_url = os.environ['WEBSOCKET_URL']
             cloudfront_domain = os.environ['CLOUDFRONT_DOMAIN']
             distribution_id = os.environ['DISTRIBUTION_ID']
+            upload_api_url = os.environ['UPLOAD_API_URL']
 
             print(f"Using bucket: {bucket}")
             print(f"Using websocket URL: {websocket_url}")
@@ -24,7 +25,8 @@ def handler(event, context):
             # Create updated config
             config = {
                 'websocketUrl': websocket_url,
-                'cloudfrontDomain': cloudfront_domain
+                'cloudfrontDomain': cloudfront_domain,
+                'uploadApiUrl': upload_api_url
             }
             print("Config created, uploading to S3...")
 

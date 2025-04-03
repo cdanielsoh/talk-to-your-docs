@@ -1,11 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import Chat from '../Chat/Chat';
 import DocumentViewer from '../DocumentViewer/DocumentViewer';
-import Selector from '../Selector/Selector'; // Updated import
+import Selector from '../Selector/Selector';
+import Sidebar from '../DocumentSidebar/DocumentSidebar';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
-import { CircularProgress, Box, Typography, Button, ButtonGroup, Paper } from '@mui/material';
+import {
+  CircularProgress,
+  Box,
+  Typography,
+  Button,
+  ButtonGroup,
+  Paper,
+  IconButton,
+  AppBar,
+  Toolbar,
+  useMediaQuery
+} from '@mui/material';
 import ArrowBackIosNewIcon from '@mui/icons-material/ArrowBackIosNew';
 import ArrowForwardIosIcon from '@mui/icons-material/ArrowForwardIos';
+import MenuIcon from '@mui/icons-material/Menu';
 import './Layout.css';
 
 const theme = createTheme({
@@ -25,7 +38,11 @@ const theme = createTheme({
   },
 });
 
+// Sidebar drawer width
+const DRAWER_WIDTH = 350;
+
 function Layout() {
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [messages, setMessages] = useState([]);
   const [availableSources, setAvailableSources] = useState([]);
   const [currentDocumentIndex, setCurrentDocumentIndex] = useState(0);
@@ -34,14 +51,20 @@ function Layout() {
   const [isConnecting, setIsConnecting] = useState(true);
   const [connectionError, setConnectionError] = useState(null);
   const [aiRespondingMessageId, setAiRespondingMessageId] = useState(null);
-  // Add state for search method selection
   const [selectedModel, setSelectedModel] = useState('amazon.nova-pro-v1:0');
   const [selectedSearchMethod, setSelectedSearchMethod] = useState('opensearch');
   const [config, setConfig] = useState(null);
   const [configLoading, setConfigLoading] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
+  const [uploadedDocuments, setUploadedDocuments] = useState([]);
 
   // Current document derived from available sources and current index
   const currentDocument = availableSources.length > 0 ? availableSources[currentDocumentIndex] : null;
+
+  // Toggle sidebar
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen);
+  };
 
   // Function to handle model changes
   const handleModelChange = (modelId) => {
@@ -64,6 +87,29 @@ function Layout() {
         return prevIndex === 0 ? availableSources.length - 1 : prevIndex - 1;
       }
     });
+  };
+
+  // Handle document selection from sidebar
+  const handleSelectDocument = (document) => {
+    // Check if this document is already in available sources
+    const existingIndex = availableSources.findIndex(
+      source => source.url === document.url
+    );
+
+    if (existingIndex >= 0) {
+      // If exists, just focus on it
+      setCurrentDocumentIndex(existingIndex);
+    } else {
+      // Otherwise add it and focus on it
+      setAvailableSources(prev => [...prev, document]);
+      setCurrentDocumentIndex(availableSources.length);
+    }
+  };
+
+  // Handle successful document upload
+  const handleUploadSuccess = (data) => {
+    // We'll potentially refetch documents, but the regular polling will handle that
+    console.log('Document uploaded successfully:', data);
   };
 
   // Load config.json first
@@ -222,10 +268,6 @@ function Layout() {
       // Reset the AI responding message ID for a new conversation turn
       setAiRespondingMessageId(null);
 
-      // Clear previous sources when starting a new conversation
-      setAvailableSources([]);
-      setCurrentDocumentIndex(0);
-
       // Add user message to chat
       setMessages(prev => [...prev, {
         id: Date.now(),
@@ -273,19 +315,64 @@ function Layout() {
   return (
     <ThemeProvider theme={theme}>
       <div className="app-layout">
-        {/* Selector container */}
-        <Paper className="selector-container" elevation={1}>
-          <Box sx={{ p: 2 }}>
-            <Selector
-              selectedModel={selectedModel}
-              onModelChange={handleModelChange}
-              selectedMethod={selectedSearchMethod}
-              onMethodChange={handleSearchMethodChange}
-            />
-          </Box>
-        </Paper>
+        {/* Top AppBar */}
+        <AppBar position="static" color="default" elevation={1}>
+          <Toolbar>
+            <IconButton
+              edge="start"
+              color="inherit"
+              aria-label="menu"
+              onClick={toggleSidebar}
+              sx={{ mr: 2 }}
+            >
+              <MenuIcon />
+            </IconButton>
 
-        <div className="app-container">
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              Document Chatbot
+            </Typography>
+
+            {/* Move selector to the AppBar for cleaner layout */}
+            <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+              <Selector
+                selectedModel={selectedModel}
+                onModelChange={handleModelChange}
+                selectedMethod={selectedSearchMethod}
+                onMethodChange={handleSearchMethodChange}
+              />
+            </Box>
+          </Toolbar>
+        </AppBar>
+
+        {/* Responsive Selector for mobile */}
+        <Box sx={{ display: { xs: 'block', md: 'none' }, p: 2 }}>
+          <Selector
+            selectedModel={selectedModel}
+            onModelChange={handleModelChange}
+            selectedMethod={selectedSearchMethod}
+            onMethodChange={handleSearchMethodChange}
+          />
+        </Box>
+
+        {/* Main content */}
+        <Box className="app-container" sx={{
+          ml: sidebarOpen && !isMobile ? `${DRAWER_WIDTH}px` : 0,
+          transition: theme.transitions.create(['margin', 'width'], {
+            easing: theme.transitions.easing.sharp,
+            duration: theme.transitions.duration.leavingScreen,
+          }),
+        }}>
+          {/* Sidebar */}
+          <Sidebar
+            apiUrl={config?.uploadApiUrl}
+            cloudFrontDomain={config?.cloudfrontDomain}
+            onSelectDocument={handleSelectDocument}
+            onUploadSuccess={handleUploadSuccess}
+            open={sidebarOpen}
+            toggleSidebar={toggleSidebar}
+          />
+
+          {/* Chat panel */}
           <div className="chat-panel">
             <Chat
               messages={messages}
@@ -293,6 +380,8 @@ function Layout() {
               isConnected={isConnected}
             />
           </div>
+
+          {/* Document panel */}
           <div className="document-panel">
             <DocumentViewer
               document={currentDocument}
@@ -304,9 +393,9 @@ function Layout() {
               cloudfrontDomain={config?.cloudfrontDomain}
             />
 
-            {/* Always show navigation footer, but disable buttons if needed */}
+            {/* Navigation footer */}
             <div className="document-navigation">
-              <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2, p: 1, borderTop: '1px solid #e0e0e0' }}>
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 1 }}>
                 <ButtonGroup variant="outlined" size="small">
                   <Button
                     onClick={() => navigateDocument('prev')}
@@ -331,7 +420,7 @@ function Layout() {
               </Box>
             </div>
           </div>
-        </div>
+        </Box>
       </div>
     </ThemeProvider>
   );
