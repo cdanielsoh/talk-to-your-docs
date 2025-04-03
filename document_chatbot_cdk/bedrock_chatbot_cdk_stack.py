@@ -228,6 +228,13 @@ class BedrockChatbotStack(cdk.Stack):
             description="Layer containing pdfplumber and dependencies"
         )
 
+        boto3_layer = lambda_.LayerVersion(
+            self, "Boto3layer",
+            code=lambda_.Code.from_asset("./layers/boto3.zip"),
+            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
+            description="Layer containing boto3 and dependencies"
+        )
+
         # Use the existing KB sync Lambda with modifications
         kb_sync_lambda = lambda_.Function(
             self, 'KBSyncFunction',
@@ -321,7 +328,7 @@ class BedrockChatbotStack(cdk.Stack):
             },
             timeout=Duration.minutes(15),  # Increased for document processing
             memory_size=1024,  # Increased for document processing
-            layers=[requests_layer, pdfplumber_layer],
+            layers=[requests_layer, pdfplumber_layer, boto3_layer],
             role=processor_role
         )
 

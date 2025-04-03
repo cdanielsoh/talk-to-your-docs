@@ -84,6 +84,10 @@ def handler(event, context):
                     'kb_index': 'PENDING',
                     'cr_index': 'PENDING'
                 },
+                'indexStatus': {
+                    'contextual_retrieval': 'PENDING',
+                    'knowledge_base': 'PENDING'
+                },
                 's3Url': f"s3://{document_bucket}/{file_key}",
                 'tokenUsage': {
                     'input_tokens': 0,

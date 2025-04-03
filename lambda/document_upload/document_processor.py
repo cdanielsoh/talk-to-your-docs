@@ -52,9 +52,21 @@ def handler(event, context):
 
             print(f"Processing document {key} from bucket {bucket}")
 
+            # First, update status to PROCESSING
+            update_document_status(document_table, document_id, 'PROCESSING', None,
+                                   "Document is being processed")
+
+            # Get file from S3 (needed for both KB sync and OpenSearch processing)
+            s3 = boto3.client('s3')
+            response = s3.get_object(Bucket=bucket, Key=key)
+            pdf_content = response['Body'].read()
+            s3_uri = f"s3://{bucket}/{key}"
+
+            # 1. Start KB sync job first
+            print(f"Starting Bedrock Knowledge Base ingestion job for document {document_id}")
             kb_sync_event = {
-                'RequestType': 'Create',  # Treat like a CloudFormation custom resource event
-                'ResponseURL': 'https://dummy-url/not-used',  # Dummy URL as we're calling directly
+                'RequestType': 'Create',
+                'ResponseURL': 'https://dummy-url/not-used',
                 'StackId': 'direct-invocation',
                 'RequestId': document_id,
                 'LogicalResourceId': f'DocumentIngestion-{document_id}',
@@ -65,39 +77,49 @@ def handler(event, context):
                 }
             }
 
-            print(f"Invoking KB sync Lambda {kb_sync_lambda_arn} for document {document_id}")
-
-            response = lambda_client.invoke(
+            lambda_client.invoke(
                 FunctionName=kb_sync_lambda_arn,
                 InvocationType='Event',  # Asynchronous invocation
                 Payload=json.dumps(kb_sync_event)
             )
 
             # Update status to indicate KB sync has been triggered
-            update_document_status(document_table, document_id, 'INGESTING', {},
-                                   f"Bedrock Knowledge Base ingestion job started")
+            update_opensearch_status(document_table, document_id, 'kb_index', 'INGESTING',
+                                     "Bedrock Knowledge Base ingestion job started")
 
-            # Get file from S3
-            s3 = boto3.client('s3')
-            response = s3.get_object(Bucket=bucket, Key=key)
-            pdf_content = response['Body'].read()
+            # 2. Process document for contextual retrieval in parallel
+            print(f"Starting OpenSearch contextual retrieval processing for document {document_id}")
 
-            # Process document
-            s3_uri = f"s3://{bucket}/{key}"
+            # Set CR index status to PROCESSING
+            update_opensearch_status(document_table, document_id, 'cr_index', 'PROCESSING',
+                                     "Processing document for contextual retrieval")
+
+            # Process the document
             segments_indexed, token_usage = processor.process_document(pdf_content, key, s3_uri, document_id)
 
             print(f"Successfully processed {key}: indexed {segments_indexed} segments")
             print(f"Total token usage: {token_usage}")
 
-            # Update document record in DynamoDB if document_id is provided
-            if document_id and document_table:
-                update_document_status(
-                    document_table,
-                    document_id,
-                    "PROCESSED",
-                    token_usage,
-                    f"Document processed successfully. Indexed {segments_indexed} segments.",
+            # Update opensearchStatus for cr_index and set token usage at the same time
+            try:
+                document_table.update_item(
+                    Key={'id': document_id},
+                    UpdateExpression="SET opensearchStatus.cr_index = :status, tokenUsage = :tokens, lastUpdated = :time",
+                    ExpressionAttributeValues={
+                        ':status': 'COMPLETED',
+                        ':tokens': token_usage,
+                        ':time': datetime.utcnow().isoformat()
+                    }
                 )
+                print(f"Updated CR index status to COMPLETED and set token usage: {token_usage}")
+            except Exception as e:
+                print(f"Error updating CR index status and token usage: {str(e)}")
+                # Fallback to separate updates if the combined update fails
+                update_opensearch_status(document_table, document_id, 'cr_index', 'COMPLETED',
+                                         f"Successfully indexed {segments_indexed} segments in contextual retrieval index.")
+
+            # Check if both indexes are complete - one might be if KB sync finished quickly
+            check_and_update_overall_status(document_table, document_id)
 
         except Exception as e:
             print(f"Error processing message: {str(e)}")
@@ -107,33 +129,120 @@ def handler(event, context):
                     document_table,
                     document_id,
                     "ERROR",
+                    None,
                     f"Error processing document: {str(e)}"
                 )
             # Don't raise exception - let SQS delete the message to avoid retries
-            # If you want retries, you can raise an exception here
+
 
 def update_document_status(table, document_id, status, token_usage, message=None):
     """Update document status in DynamoDB"""
-    update_expression = "SET #status = :status, lastUpdated = :time, #tokenUsage = :tokenUsage"
-    expression_attribute_names = {'#status': 'status', '#tokenUsage': 'tokenUsage'}
+    if not table or not document_id:
+        print(f"Cannot update document status: Missing table or document ID")
+        return
+
+    update_expression = "SET #status = :status, lastUpdated = :time"
+    expression_attribute_names = {'#status': 'status'}
     expression_attribute_values = {
         ':status': status,
         ':time': datetime.utcnow().isoformat(),
-        ':tokenUsage': token_usage
     }
+
+    # Add token usage if provided and not None
+    if token_usage is not None and token_usage:
+        print(f"Token usage before update for document {document_id}: {token_usage}")
+        update_expression += ", tokenUsage = :tokenUsage"
+        expression_attribute_names['#tokenUsage'] = 'tokenUsage'
+        expression_attribute_values[':tokenUsage'] = token_usage
 
     if message:
         update_expression += ", statusMessage = :message"
         expression_attribute_values[':message'] = message
 
-    table.update_item(
-        Key={'id': document_id},
-        UpdateExpression=update_expression,
-        ExpressionAttributeNames=expression_attribute_names,
-        ExpressionAttributeValues=expression_attribute_values
-    )
+    try:
+        table.update_item(
+            Key={'id': document_id},
+            UpdateExpression=update_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+            ExpressionAttributeValues=expression_attribute_values
+        )
+        print(f"Updated document {document_id} status to {status} with token usage: {token_usage}")
+    except Exception as e:
+        print(f"Error updating document status: {str(e)}")
 
-    print(f"Updated document {document_id} status to {status}")
+def update_opensearch_status(table, document_id, index_type, status, message=None):
+    """Update the OpenSearch status for a specific index type"""
+    try:
+        update_expression = "SET opensearchStatus.#indexType = :status, lastUpdated = :time"
+        expression_attribute_names = {'#indexType': index_type}
+        expression_attribute_values = {
+            ':status': status,
+            ':time': datetime.utcnow().isoformat()
+        }
+
+        if message:
+            update_expression += ", #statusMsg = :message"
+            expression_attribute_names['#statusMsg'] = 'statusMessage'
+            expression_attribute_values[':message'] = message
+
+        table.update_item(
+            Key={'id': document_id},
+            UpdateExpression=update_expression,
+            ExpressionAttributeNames=expression_attribute_names,
+            ExpressionAttributeValues=expression_attribute_values
+        )
+
+        print(f"Updated document {document_id} OpenSearch status for {index_type} to {status}")
+    except Exception as e:
+        print(f"Error updating OpenSearch status: {str(e)}")
+
+
+def check_and_update_overall_status(table, document_id):
+    """Check OpenSearch status and update overall status if both are complete"""
+    try:
+        # Get current document
+        response = table.get_item(Key={'id': document_id})
+        if 'Item' not in response:
+            print(f"Document {document_id} not found")
+            return
+
+        document = response['Item']
+        opensearch_status = document.get('opensearchStatus', {})
+
+        # Check if both indexes are complete
+        cr_index_status = opensearch_status.get('cr_index', 'PENDING')
+        kb_index_status = opensearch_status.get('kb_index', 'PENDING')
+
+        print(f"Current status - CR index: {cr_index_status}, KB index: {kb_index_status}")
+
+        # If both are complete, update the overall status
+        if cr_index_status == 'COMPLETED' and kb_index_status == 'COMPLETED':
+            update_document_status(
+                table,
+                document_id,
+                'COMPLETED',
+                document.get('tokenUsage', {}),
+                "Document has been fully processed and is ready for use"
+            )
+            print(f"Document {document_id} is now fully processed")
+
+        # If either has errored, update the overall status to ERROR
+        elif 'ERROR' in [cr_index_status, kb_index_status]:
+            update_document_status(
+                table,
+                document_id,
+                'ERROR',
+                document.get('tokenUsage', {}),
+                "Error during document processing"
+            )
+            print(f"Document {document_id} processing failed")
+
+        # Otherwise, keep the current status
+        else:
+            print(f"Document {document_id} is still processing")
+
+    except Exception as e:
+        print(f"Error checking and updating status: {str(e)}")
 
 
 class DocumentProcessor:
@@ -301,27 +410,40 @@ class DocumentProcessor:
 
                 # Track tokens for this segment
                 segment["token_usage"] = response['usage']
+                print(f"Token usage for segment: {response['usage']}")
+
+                # Extract and convert usage from the response
+                input_tokens = response['usage'].get('inputTokens', 0)
+                output_tokens = response['usage'].get('outputTokens', 0)
+                cache_read = response['usage'].get('cacheReadInputTokens', 0)
+                cache_write = response['usage'].get('cacheWriteInputTokens', 0)
 
                 # Add to totals
-                total_input_tokens += segment["token_usage"]["inputTokens"]
-                total_output_tokens += segment["token_usage"]["inputTokens"]
-                total_cache_read_input_tokens += segment["token_usage"]["cacheReadInputTokens"]
-                total_cache_write_input_tokens += segment["token_usage"]["cacheWriteInputTokens"]
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens
+                total_cache_read_input_tokens += cache_read
+                total_cache_write_input_tokens += cache_write
 
                 segment["enhanced_content"] = f"Context: {context_description}\n\nContent: {segment['content']}"
                 enhanced_segments.append(segment)
-                print(segment)
 
             except Exception as e:
                 print(f"Error enhancing segment {segment['id']}: {e}")
                 # Use original content as fallback
                 segment["enhanced_content"] = segment["content"]
-                segment["token_usage"] = {"input_tokens": 0, "output_tokens": 0}
+                segment["token_usage"] = {"inputTokens": 0, "outputTokens": 0}
                 enhanced_segments.append(segment)
 
         # Return segments and token usage totals
-        return enhanced_segments, {"input_tokens": total_input_tokens, "output_tokens": total_output_tokens,
-                                   "cache_read_input_tokens": total_cache_read_input_tokens, "cache_write_input_tokens": total_cache_write_input_tokens}
+        token_usage = {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "cache_read_input_tokens": total_cache_read_input_tokens,
+            "cache_write_input_tokens": total_cache_write_input_tokens
+        }
+
+        print(f"Total token usage: {token_usage}")
+        return enhanced_segments, token_usage
 
     def _get_embedding(self, text):
         """Generate vector embedding for text"""
