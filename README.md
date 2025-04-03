@@ -1,4 +1,4 @@
-# Document Chatbot with AWS Bedrock
+# Talk to your PDF with AWS Bedrock Knowledge Bases and Contextual Retrieval
 
 A full-stack application that creates a chat interface for your PDF documents using AWS Bedrock, Amazon OpenSearch Serverless, and AWS CDK.
 It displays the source PDF when providing answers.
