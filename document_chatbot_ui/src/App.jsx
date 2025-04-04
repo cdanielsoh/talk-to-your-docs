@@ -18,17 +18,6 @@ function App() {
 
         const configData = await response.json();
 
-        // Add API URL for document upload endpoints
-        // The API URL is derived from the WebSocket URL by replacing 'wss' with 'https'
-        // and removing the 'websocket' part from the path
-        if (configData.websocketUrl) {
-          const apiUrl = configData.websocketUrl
-            .replace('wss://', 'https://')
-            .replace('/websocket', '');
-
-          configData.uploadApiUrl = apiUrl;
-        }
-
         setConfig(configData);
         setLoading(false);
       } catch (error) {

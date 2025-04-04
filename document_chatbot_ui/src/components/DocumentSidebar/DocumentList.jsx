@@ -16,7 +16,9 @@ import {
   Button,
   Collapse,
   Tooltip,
-  Grid
+  Grid,
+  LinearProgress,
+  Stack
 } from '@mui/material';
 import DescriptionIcon from '@mui/icons-material/Description';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -27,6 +29,8 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import HourglassEmptyIcon from '@mui/icons-material/HourglassEmpty';
+import StorageIcon from '@mui/icons-material/Storage';
+import SearchIcon from '@mui/icons-material/Search';
 
 const TERMINAL_STATES = ['COMPLETED', 'ERROR'];
 const POLLING_INTERVAL = 10000; // 10 seconds
@@ -55,15 +59,32 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
 
       const data = await response.json();
       console.log('Received document data:', data);
-      setDocuments(data.documents || []);
+
+      // Map opensearchStatus to indexStatus for compatibility
+      const processedDocuments = (data.documents || []).map(doc => {
+        // Handle both data formats (opensearchStatus and indexStatus)
+        const indexStatus = doc.opensearchStatus
+          ? {
+              knowledge_base: doc.opensearchStatus.kb_index,
+              contextual_retrieval: doc.opensearchStatus.cr_index
+            }
+          : doc.indexStatus;
+
+        return {
+          ...doc,
+          indexStatus
+        };
+      });
+
+      setDocuments(processedDocuments);
 
       // Check if all documents are in terminal states (COMPLETED or ERROR)
-      const allDocumentsProcessed = (data.documents || []).every(
+      const allDocumentsProcessed = processedDocuments.every(
         doc => TERMINAL_STATES.includes(doc.status)
       );
 
       // If all documents are processed, we can stop polling
-      if (allDocumentsProcessed && data.documents.length > 0) {
+      if (allDocumentsProcessed && processedDocuments.length > 0) {
         console.log('All documents processed, stopping polling');
         setIsPolling(false);
       }
@@ -127,6 +148,7 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
   // Render document status chip
   const renderStatusChip = (status) => {
     let color = 'default';
+    let label = status;
     let tooltip = '';
 
     switch (status) {
@@ -136,11 +158,12 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
         break;
       case 'PROCESSING':
         color = 'warning';
-        tooltip = 'Document is being prepared for the knowledge base';
+        label = 'INGESTING';
+        tooltip = 'Document is being ingested';
         break;
       case 'INGESTING':
         color = 'warning';
-        tooltip = 'Document is being ingested by the Bedrock Knowledge Base';
+        tooltip = 'Document is being ingested';
         break;
       case 'COMPLETED':
         color = 'success';
@@ -158,7 +181,7 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
     return (
       <Tooltip title={tooltip}>
         <Chip
-          label={status}
+          label={label}
           color={color}
           size="small"
           variant="outlined"
@@ -167,49 +190,126 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
     );
   };
 
-  // Render index status icon with tooltip
-  const renderIndexStatus = (status, label) => {
-    let icon = <HourglassEmptyIcon fontSize="small" color="action" />;
-    let tooltipText = `${label} index is pending`;
-    let color = "text.secondary";
+  // Calculate Knowledge Base ingestion progress
+  const calculateKnowledgeBaseProgress = (indexStatus) => {
+    if (!indexStatus) return 0;
 
-    switch (status) {
-      case 'COMPLETED':
-        icon = <CheckCircleOutlineIcon fontSize="small" color="success" />;
-        tooltipText = `${label} index is complete`;
-        color = "success.main";
-        break;
-      case 'PENDING':
-        icon = <HourglassEmptyIcon fontSize="small" color="action" />;
-        tooltipText = `${label} index is pending`;
-        break;
-      case 'PROCESSING':
-        icon = <CircularProgress size={16} />;
-        tooltipText = `${label} index is processing`;
-        break;
-      case 'INGESTING':
-        icon = <CircularProgress size={16} />;
-        tooltipText = `${label} index is being ingested`;
-        break;
-      case 'ERROR':
-        icon = <ErrorOutlineIcon fontSize="small" color="error" />;
-        tooltipText = `${label} index encountered an error`;
-        color = "error.main";
-        break;
-      default:
-        icon = <HourglassEmptyIcon fontSize="small" color="action" />;
-        tooltipText = `${label} index status: ${status}`;
-    }
+    const statusValues = {
+      'PENDING': 0,
+      'PROCESSING': 50,
+      'INGESTING': 75,
+      'COMPLETED': 100,
+      'ERROR': 0
+    };
+
+    return statusValues[indexStatus.knowledge_base] || 0;
+  };
+
+  // Render improved process progress with icons and labels
+  const renderProcessProgressBar = (indexStatus) => {
+    if (!indexStatus) return null;
+
+    const getProgressInfo = (status) => {
+      switch (status) {
+        case 'COMPLETED':
+          return { value: 100, color: 'success.main', text: 'Complete' };
+        case 'PROCESSING':
+          return { value: 50, color: 'warning.main', text: 'Ingesting', loading: true };
+        case 'INGESTING':
+          return { value: 75, color: 'warning.main', text: 'Ingesting', loading: true };
+        case 'ERROR':
+          return { value: 100, color: 'error.main', text: 'Error' };
+        case 'PENDING':
+        default:
+          return { value: 0, color: 'info.main', text: 'Pending' };
+      }
+    };
+
+    const kbInfo = getProgressInfo(indexStatus.knowledge_base);
+    const crInfo = getProgressInfo(indexStatus.contextual_retrieval);
 
     return (
-      <Tooltip title={tooltipText}>
-        <Box sx={{ display: 'flex', alignItems: 'center', mr: 2 }}>
-          {icon}
-          <Typography variant="caption" color={color} sx={{ ml: 0.5 }}>
-            {label}
-          </Typography>
-        </Box>
-      </Tooltip>
+      <Box sx={{ width: '100%', mt: 1, mb: 1 }}>
+        <Grid container spacing={2}>
+          <Grid item xs={12}>
+            <Typography variant="subtitle2" gutterBottom sx={{ fontWeight: 'medium' }}>
+              Processing Status
+            </Typography>
+          </Grid>
+
+          <Grid item xs={12}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+              <StorageIcon sx={{ mr: 1, color: 'primary.main' }} fontSize="small" />
+              <Typography variant="body2" sx={{ fontWeight: 'medium', flex: 1 }}>
+                Bedrock Knowledge Base
+              </Typography>
+              <Chip
+                label={kbInfo.text}
+                size="small"
+                color={kbInfo.color.split('.')[0]}
+                variant="outlined"
+                sx={{ minWidth: 90, textAlign: 'center' }}
+              />
+            </Box>
+            {kbInfo.loading ? (
+              <LinearProgress
+                variant="indeterminate"
+                sx={{ height: 6, borderRadius: 1, mb: 2 }}
+              />
+            ) : (
+              <LinearProgress
+                variant="determinate"
+                value={kbInfo.value}
+                sx={{
+                  height: 6,
+                  borderRadius: 1,
+                  mb: 2,
+                  backgroundColor: 'rgba(0,0,0,0.05)',
+                  '& .MuiLinearProgress-bar': {
+                    backgroundColor: kbInfo.color
+                  }
+                }}
+              />
+            )}
+          </Grid>
+
+          <Grid item xs={12}>
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+              <SearchIcon sx={{ mr: 1, color: 'secondary.main' }} fontSize="small" />
+              <Typography variant="body2" sx={{ fontWeight: 'medium', flex: 1 }}>
+                Contextual Retrieval
+              </Typography>
+              <Chip
+                label={crInfo.text}
+                size="small"
+                color={crInfo.color.split('.')[0]}
+                variant="outlined"
+                sx={{ minWidth: 90, textAlign: 'center' }}
+              />
+            </Box>
+            {crInfo.loading ? (
+              <LinearProgress
+                variant="indeterminate"
+                color="secondary"
+                sx={{ height: 6, borderRadius: 1 }}
+              />
+            ) : (
+              <LinearProgress
+                variant="determinate"
+                value={crInfo.value}
+                sx={{
+                  height: 6,
+                  borderRadius: 1,
+                  backgroundColor: 'rgba(0,0,0,0.05)',
+                  '& .MuiLinearProgress-bar': {
+                    backgroundColor: crInfo.color
+                  }
+                }}
+              />
+            )}
+          </Grid>
+        </Grid>
+      </Box>
     );
   };
 
@@ -409,13 +509,18 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
                   </Avatar>
                 </ListItemAvatar>
                 <ListItemText
-                  primary={doc.fileName}
+                  primary={
+                    <Typography variant="subtitle1" noWrap sx={{ maxWidth: '80%' }}>
+                      {doc.fileName}
+                    </Typography>
+                  }
                   secondary={
                     <React.Fragment>
                       <Typography component="span" variant="body2" color="text.secondary">
                         {formatTimestamp(doc.uploadTime)}
                       </Typography>
-                      <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center' }}>
+
+                      <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center', mb: 0.5 }}>
                         {renderStatusChip(doc.status)}
                         {doc.statusMessage && (
                           <Tooltip title={doc.statusMessage}>
@@ -426,11 +531,19 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
                         )}
                       </Box>
 
-                      {/* Index statuses */}
-                      {doc.indexStatus && (
-                        <Box sx={{ mt: 0.5, display: 'flex', alignItems: 'center' }}>
-                          {renderIndexStatus(doc.indexStatus.contextual_retrieval, 'CR')}
-                          {renderIndexStatus(doc.indexStatus.knowledge_base, 'KB')}
+                      {/* Knowledge Base Ingestion progress */}
+                      {doc.indexStatus && doc.status !== 'COMPLETED' && doc.status !== 'ERROR' && (
+                        <Box sx={{ display: 'flex', alignItems: 'center', mt: 0.5 }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ mr: 1, minWidth: '50px' }}>
+                            KB Status:
+                          </Typography>
+                          <Box sx={{ flex: 1 }}>
+                            <LinearProgress
+                              variant={['PROCESSING', 'INGESTING'].includes(doc.indexStatus.knowledge_base) ? "indeterminate" : "determinate"}
+                              value={calculateKnowledgeBaseProgress(doc.indexStatus)}
+                              sx={{ height: 4, borderRadius: 1 }}
+                            />
+                          </Box>
                         </Box>
                       )}
                     </React.Fragment>
@@ -457,24 +570,49 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
                     </Typography>
                   )}
 
-                  {/* Detailed index status information */}
+                  {/* Knowledge Base Process Status */}
                   {doc.indexStatus && (
-                    <Box sx={{ mb: 1 }}>
-                      <Typography variant="subtitle2" gutterBottom>
-                        Index Statuses:
-                      </Typography>
-                      <Grid container spacing={1} sx={{ ml: 1 }}>
-                        <Grid item xs={6}>
-                          <Typography variant="body2">
-                            <strong>Contextual Retrieval:</strong> {doc.indexStatus.contextual_retrieval}
-                          </Typography>
-                        </Grid>
-                        <Grid item xs={6}>
-                          <Typography variant="body2">
-                            <strong>Knowledge Base:</strong> {doc.indexStatus.knowledge_base}
-                          </Typography>
-                        </Grid>
-                      </Grid>
+                    <Box sx={{ mb: 2, mt: 1 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                        <StorageIcon sx={{ mr: 1, color: 'primary.main' }} fontSize="small" />
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'medium', flex: 1 }}>
+                          Bedrock Knowledge Base Status
+                        </Typography>
+                        <Chip
+                          label={doc.indexStatus.knowledge_base}
+                          size="small"
+                          color={doc.indexStatus.knowledge_base === 'COMPLETED' ? 'success' :
+                                 doc.indexStatus.knowledge_base === 'ERROR' ? 'error' : 'warning'}
+                          variant="outlined"
+                          sx={{ minWidth: 90, textAlign: 'center' }}
+                        />
+                      </Box>
+                      {['PROCESSING', 'INGESTING'].includes(doc.indexStatus.knowledge_base) ? (
+                        <LinearProgress
+                          variant="indeterminate"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : doc.indexStatus.knowledge_base === 'COMPLETED' ? (
+                        <LinearProgress
+                          variant="determinate"
+                          value={100}
+                          color="success"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : doc.indexStatus.knowledge_base === 'ERROR' ? (
+                        <LinearProgress
+                          variant="determinate"
+                          value={100}
+                          color="error"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : (
+                        <LinearProgress
+                          variant="determinate"
+                          value={0}
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      )}
                     </Box>
                   )}
 
@@ -485,11 +623,62 @@ const DocumentList = ({ apiUrl, cloudFrontDomain, onSelectDocument }) => {
                     </Typography>
                   )}
 
+                  {/* Contextual Retrieval Status */}
+                  {doc.indexStatus && (
+                    <Box sx={{ mb: 2 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                        <SearchIcon sx={{ mr: 1, color: 'secondary.main' }} fontSize="small" />
+                        <Typography variant="subtitle2" sx={{ fontWeight: 'medium', flex: 1 }}>
+                          Contextual Retrieval Status
+                        </Typography>
+                        <Chip
+                          label={doc.indexStatus.contextual_retrieval}
+                          size="small"
+                          color={doc.indexStatus.contextual_retrieval === 'COMPLETED' ? 'success' :
+                                 doc.indexStatus.contextual_retrieval === 'ERROR' ? 'error' : 'warning'}
+                          variant="outlined"
+                          sx={{ minWidth: 90, textAlign: 'center' }}
+                        />
+                      </Box>
+                      {['PROCESSING', 'INGESTING'].includes(doc.indexStatus.contextual_retrieval) ? (
+                        <LinearProgress
+                          variant="indeterminate"
+                          color="secondary"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : doc.indexStatus.contextual_retrieval === 'COMPLETED' ? (
+                        <LinearProgress
+                          variant="determinate"
+                          value={100}
+                          color="success"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : doc.indexStatus.contextual_retrieval === 'ERROR' ? (
+                        <LinearProgress
+                          variant="determinate"
+                          value={100}
+                          color="error"
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      ) : (
+                        <LinearProgress
+                          variant="determinate"
+                          value={0}
+                          sx={{ height: 6, borderRadius: 1 }}
+                        />
+                      )}
+                    </Box>
+                  )}
+
+                  {/* Token Usage */}
                   {doc.tokenUsage && (
-                    <Box sx={{ mt: 1, mb: 1 }}>
-                      <Typography variant="subtitle2" gutterBottom>
-                        Token Usage:
-                      </Typography>
+                    <Box sx={{ mt: 2, mb: 1, p: 1.5, bgcolor: 'rgba(0, 0, 0, 0.03)', borderRadius: 1, border: '1px solid rgba(0, 0, 0, 0.08)' }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                        <SearchIcon sx={{ mr: 1, color: 'secondary.main' }} fontSize="small" />
+                        <Typography variant="subtitle2">
+                          Contextual Retrieval Token Usage
+                        </Typography>
+                      </Box>
                       <Box sx={{ ml: 1, mt: 0.5, fontSize: '0.85rem' }}>
                         {formatTokenUsage(doc.tokenUsage)}
                       </Box>

@@ -12,6 +12,7 @@
   max-width: 50%;
   box-shadow: 2px 0 10px rgba(0,0,0,0.05);
   background-color: white;
+  position: relative;
 }
 
 .document-panel {
@@ -129,4 +130,29 @@
 /* Make buttons more visible */
 .MuiButtonGroup-root .MuiButton-root {
   min-width: 64px;
+}
+
+/* Fix for sidebar spacing issue */
+.MuiDrawer-root .MuiDrawer-paper {
+  box-sizing: border-box;
+  border-right: 1px solid rgba(0, 0, 0, 0.12);
+  position: fixed;
+  top: 0;
+  left: 0;
+}
+
+.MuiDrawer-docked {
+  flex: 0 0 auto;
+}
+
+/* Ensure no double scrollbars */
+body, html {
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Ensure content touches sidebar with no gap */
+.MuiDrawer-docked + .app-container {
+  margin-left: 0; /* Remove automatic margin */
 }

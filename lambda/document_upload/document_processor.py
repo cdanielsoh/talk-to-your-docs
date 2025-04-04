@@ -52,9 +52,22 @@ def handler(event, context):
 
             print(f"Processing document {key} from bucket {bucket}")
 
-            # First, update status to PROCESSING
-            update_document_status(document_table, document_id, 'PROCESSING', None,
-                                   "Document is being processed")
+            # First, update status to PROCESSING (direct update)
+            if document_table and document_id:
+                try:
+                    document_table.update_item(
+                        Key={'id': document_id},
+                        UpdateExpression="SET #status = :status, lastUpdated = :time, statusMessage = :message",
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={
+                            ':status': 'PROCESSING',
+                            ':time': datetime.utcnow().isoformat(),
+                            ':message': "Document is being processed"
+                        }
+                    )
+                    print(f"Updated document {document_id} status to PROCESSING")
+                except Exception as e:
+                    print(f"Error updating document status to PROCESSING: {str(e)}")
 
             # Get file from S3 (needed for both KB sync and OpenSearch processing)
             s3 = boto3.client('s3')
@@ -123,17 +136,23 @@ def handler(event, context):
 
         except Exception as e:
             print(f"Error processing message: {str(e)}")
-            # Update status to error if document_id is available
+            # Update status to error if document_id is available (direct update)
             if document_id and document_table:
-                update_document_status(
-                    document_table,
-                    document_id,
-                    "ERROR",
-                    None,
-                    f"Error processing document: {str(e)}"
-                )
+                try:
+                    document_table.update_item(
+                        Key={'id': document_id},
+                        UpdateExpression="SET #status = :status, lastUpdated = :time, statusMessage = :message",
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={
+                            ':status': 'ERROR',
+                            ':time': datetime.utcnow().isoformat(),
+                            ':message': f"Error processing document: {str(e)}"
+                        }
+                    )
+                    print(f"Updated document {document_id} status to ERROR")
+                except Exception as update_error:
+                    print(f"Error updating document error status: {str(update_error)}")
             # Don't raise exception - let SQS delete the message to avoid retries
-
 
 def update_document_status(table, document_id, status, token_usage, message=None):
     """Update document status in DynamoDB"""
@@ -217,25 +236,39 @@ def check_and_update_overall_status(table, document_id):
 
         # If both are complete, update the overall status
         if cr_index_status == 'COMPLETED' and kb_index_status == 'COMPLETED':
-            update_document_status(
-                table,
-                document_id,
-                'COMPLETED',
-                document.get('tokenUsage', {}),
-                "Document has been fully processed and is ready for use"
-            )
-            print(f"Document {document_id} is now fully processed")
+            # Direct update without touching token usage
+            try:
+                table.update_item(
+                    Key={'id': document_id},
+                    UpdateExpression="SET #status = :status, lastUpdated = :time, statusMessage = :message",
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': 'COMPLETED',
+                        ':time': datetime.utcnow().isoformat(),
+                        ':message': "Document has been fully processed and is ready for use"
+                    }
+                )
+                print(f"Document {document_id} is now fully processed")
+            except Exception as e:
+                print(f"Error updating final completion status: {str(e)}")
 
         # If either has errored, update the overall status to ERROR
         elif 'ERROR' in [cr_index_status, kb_index_status]:
-            update_document_status(
-                table,
-                document_id,
-                'ERROR',
-                document.get('tokenUsage', {}),
-                "Error during document processing"
-            )
-            print(f"Document {document_id} processing failed")
+            # Direct update for error status
+            try:
+                table.update_item(
+                    Key={'id': document_id},
+                    UpdateExpression="SET #status = :status, lastUpdated = :time, statusMessage = :message",
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': 'ERROR',
+                        ':time': datetime.utcnow().isoformat(),
+                        ':message': "Error during document processing"
+                    }
+                )
+                print(f"Document {document_id} processing failed")
+            except Exception as e:
+                print(f"Error updating error status: {str(e)}")
 
         # Otherwise, keep the current status
         else:

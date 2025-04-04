@@ -41,7 +41,7 @@ const theme = createTheme({
 // Sidebar drawer width
 const DRAWER_WIDTH = 350;
 
-function Layout() {
+function Layout({ config }) {
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [messages, setMessages] = useState([]);
   const [availableSources, setAvailableSources] = useState([]);
@@ -53,8 +53,6 @@ function Layout() {
   const [aiRespondingMessageId, setAiRespondingMessageId] = useState(null);
   const [selectedModel, setSelectedModel] = useState('amazon.nova-pro-v1:0');
   const [selectedSearchMethod, setSelectedSearchMethod] = useState('opensearch');
-  const [config, setConfig] = useState(null);
-  const [configLoading, setConfigLoading] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(!isMobile);
   const [uploadedDocuments, setUploadedDocuments] = useState([]);
 
@@ -112,31 +110,9 @@ function Layout() {
     console.log('Document uploaded successfully:', data);
   };
 
-  // Load config.json first
+  // Connect to WebSocket
   useEffect(() => {
-    const loadConfig = async () => {
-      try {
-        const response = await fetch('/config.json');
-        if (!response.ok) {
-          throw new Error(`Failed to load config: ${response.statusText}`);
-        }
-        const configData = await response.json();
-        setConfig(configData);
-        setConfigLoading(false);
-      } catch (err) {
-        console.error('Error loading configuration:', err);
-        setConnectionError('Failed to load application configuration. Please refresh the page or contact support.');
-        setConfigLoading(false);
-        setIsConnecting(false);
-      }
-    };
-
-    loadConfig();
-  }, []);
-
-  // Connect to WebSocket after config is loaded
-  useEffect(() => {
-    if (configLoading || !config) return;
+    if (!config || !config.websocketUrl) return;
 
     const wsUrl = config.websocketUrl;
     const ws = new WebSocket(wsUrl);
@@ -261,7 +237,7 @@ function Layout() {
     return () => {
       if (ws) ws.close();
     };
-  }, [config, configLoading]);
+  }, [config]);
 
   const handleSendMessage = (message) => {
     if (wsConnection && isConnected) {
@@ -285,15 +261,12 @@ function Layout() {
     }
   };
 
-  // If loading config or connecting, show a loading indicator
-  if (configLoading || (isConnecting && !connectionError)) {
+  // If loading or connecting, show a loading indicator
+  if (isConnecting && !connectionError) {
     return (
       <ThemeProvider theme={theme}>
-        <Box className="connecting-container">
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
           <CircularProgress />
-          <Typography variant="h6" sx={{ mt: 2 }}>
-            {configLoading ? "Loading application..." : "Connecting to server..."}
-          </Typography>
         </Box>
       </ThemeProvider>
     );
@@ -303,7 +276,7 @@ function Layout() {
   if (connectionError) {
     return (
       <ThemeProvider theme={theme}>
-        <Box className="error-container">
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh' }}>
           <Typography variant="h6" color="error">
             {connectionError}
           </Typography>
@@ -361,6 +334,8 @@ function Layout() {
             easing: theme.transitions.easing.sharp,
             duration: theme.transitions.duration.leavingScreen,
           }),
+          overflow: 'hidden', // Prevent scrolling of the container
+          gap: 0, // Remove any gap between the sidebar and chat panel
         }}>
           {/* Sidebar */}
           <Sidebar

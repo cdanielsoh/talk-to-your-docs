@@ -12,7 +12,6 @@ const Selector = ({ selectedModel, onModelChange, selectedMethod, onMethodChange
 
   const methods = [
     { id: 'opensearch', name: 'Knowledge Base (OpenSearch)' },
-    { id: 'neptune', name: 'Knowledge Base (Neptune) Coming Soon.' },
     { id: 'contextual', name: 'Contextual Retrieval' }
   ];
 

@@ -18,7 +18,11 @@ def handler(event, context):
     try:
         # Check if this is an OPTIONS request (CORS preflight)
         if event.get('httpMethod') == 'OPTIONS':
-            return handle_options()
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': ''
+            }
 
         # Parse the request
         body = json.loads(event['body'])
@@ -84,10 +88,6 @@ def handler(event, context):
                     'kb_index': 'PENDING',
                     'cr_index': 'PENDING'
                 },
-                'indexStatus': {
-                    'contextual_retrieval': 'PENDING',
-                    'knowledge_base': 'PENDING'
-                },
                 's3Url': f"s3://{document_bucket}/{file_key}",
                 'tokenUsage': {
                     'input_tokens': 0,
@@ -132,19 +132,10 @@ def handler(event, context):
         }
 
 
-def handle_options():
-    """Handle OPTIONS requests for CORS"""
-    return {
-        'statusCode': 200,
-        'headers': get_cors_headers(),
-        'body': ''
-    }
-
-
 def get_cors_headers():
     """Return CORS headers for all responses"""
     return {
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key',
+        'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Requested-With',
         'Access-Control-Allow-Methods': 'OPTIONS,POST'
     }

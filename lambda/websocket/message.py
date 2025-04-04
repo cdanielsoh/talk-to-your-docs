@@ -280,7 +280,7 @@ def handle_contextual_retrieval(query, model_id, connection_id, apigw_management
         Provide your answer by only using information from the given context.
         If the information to answer the question is not in the context, say that you don't have enough information.
         Include citation numbers [1], [2], etc. when referring to information from specific sources.
-        Answer in {language}."""
+        Answer in Korean."""
 
         # Create Bedrock client for streaming
         bedrock_client = boto3.client('bedrock-runtime', region_name=region)

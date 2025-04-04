@@ -62,7 +62,13 @@ const Sidebar = ({
           width: DRAWER_WIDTH,
           boxSizing: 'border-box',
           borderRight: '1px solid rgba(0, 0, 0, 0.12)',
+          overflow: 'hidden', // Prevent drawer from causing scrollbars
+          position: isMobile ? 'fixed' : 'absolute', // Absolute positioning improves layout consistency
+          height: '100%',
         },
+        '& + .app-container': {
+          marginLeft: 0, // Remove gap
+        }
       }}
     >
       <Box sx={{
@@ -80,7 +86,7 @@ const Sidebar = ({
         </IconButton>
       </Box>
 
-      <Box sx={{ p: 2, overflowY: 'auto' }}>
+      <Box sx={{ p: 2, height: 'calc(100% - 64px)', overflowY: 'auto' }}>
         <DocumentUpload
           apiUrl={apiUrl}
           onUploadSuccess={handleUploadSuccess}

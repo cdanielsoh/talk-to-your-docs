@@ -229,7 +229,7 @@ class BedrockChatbotStack(cdk.Stack):
         )
 
         boto3_layer = lambda_.LayerVersion(
-            self, "Boto3layer",
+            self, "Boto3plumberLayer",
             code=lambda_.Code.from_asset("./layers/boto3.zip"),
             compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
             description="Layer containing boto3 and dependencies"
