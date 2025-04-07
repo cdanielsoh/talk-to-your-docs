@@ -40,6 +40,43 @@ def _generate_embeddings(text: str) -> List[float]:
         return None
 
 
+def _create_vector_query(query: str, top_n: int) -> Dict:
+    """Create pure vector search query"""
+    embedding = _generate_embeddings(query)
+
+    if not embedding:
+        raise ValueError("Failed to generate embedding for vector search")
+
+    return {
+        "size": top_n,
+        "_source": ["content", "metadata"],
+        "query": {
+            "knn": {
+                "content_embedding": {
+                    "vector": embedding,
+                    "k": top_n
+                }
+            }
+        }
+    }
+
+
+def _create_keyword_query(query: str, top_n: int) -> Dict:
+    """Create pure keyword (BM25) search query"""
+    return {
+        "size": top_n,
+        "_source": ["content", "metadata"],
+        "query": {
+            "match": {
+                "content": {
+                    "query": query,
+                    "operator": "or"
+                }
+            }
+        }
+    }
+
+
 def _create_hybrid_query(query: str, top_n: int) -> Dict:
     """Create hybrid search query combining semantic and BM25"""
     embedding = _generate_embeddings(query)
@@ -74,8 +111,69 @@ def _create_hybrid_query(query: str, top_n: int) -> Dict:
     }
 
 
-def search(query: str, top_n: int, os_endpoint: str, os_index: str) -> List[Dict]:
-    """Perform hybrid search on OpenSearch Serverless"""
+def execute_search(client, index_name, query_body):
+    """Execute a search query and return results"""
+    try:
+        response = client.search(
+            index=index_name,
+            body=query_body
+        )
+
+        # Process results
+        return [{
+            "score": hit["_score"],
+            "content": hit["_source"]["content"],
+            "metadata": hit["_source"]["metadata"],
+            "id": hit["_id"]
+        } for hit in response["hits"]["hits"]]
+    except Exception as e:
+        print(f"Search execution error: {str(e)}")
+        return []
+
+
+def rank_fusion(results_lists, k=60):
+    """
+    Implements Reciprocal Rank Fusion to combine multiple result lists
+
+    Args:
+        results_lists: List of result lists, where each result has 'id' and 'score'
+        k: Constant to prevent division by zero and reduce impact of high rankings (default: 60)
+
+    Returns:
+        Combined and re-ranked list of results
+    """
+    # Create a dictionary to store combined scores
+    fusion_scores = {}
+
+    # Process each result list
+    for results in results_lists:
+        # Create a rank mapping for this result list
+        for rank, result in enumerate(results):
+            doc_id = result['id']
+            # RRF formula: 1 / (k + rank)
+            score = 1.0 / (k + rank)
+
+            # Add to fusion scores
+            if doc_id in fusion_scores:
+                fusion_scores[doc_id]['score'] += score
+                # Keep the result data from the first occurrence
+            else:
+                fusion_scores[doc_id] = {
+                    'score': score,
+                    'content': result['content'],
+                    'metadata': result['metadata'],
+                    'id': doc_id
+                }
+
+    # Convert dictionary to list and sort by fusion score
+    fused_results = list(fusion_scores.values())
+    fused_results.sort(key=lambda x: x['score'], reverse=True)
+
+    return fused_results
+
+
+def rank_fusion_search(query: str, top_n: int, os_endpoint: str, os_index: str) -> List[Dict]:
+    """Perform rank fusion search combining vector and keyword searches"""
     try:
         # Get AWS credentials
         credentials = boto3.Session().get_credentials()
@@ -94,25 +192,37 @@ def search(query: str, top_n: int, os_endpoint: str, os_index: str) -> List[Dict
             timeout=30
         )
 
-        # Generate query body
-        query_body = _create_hybrid_query(query, top_n)
+        # Generate query bodies - request more results for fusion
+        expanded_top_n = top_n * 3
+        vector_query = _create_vector_query(query, expanded_top_n)
+        keyword_query = _create_keyword_query(query, expanded_top_n)
 
-        # Execute search
-        response = client.search(
-            index=os_index,
-            body=query_body
-        )
+        # Execute both searches
+        vector_results = execute_search(client, os_index, vector_query)
+        keyword_results = execute_search(client, os_index, keyword_query)
 
-        # Process results
-        return [{
-            "score": hit["_score"],
-            "content": hit["_source"]["content"],
-            "metadata": hit["_source"]["metadata"]
-        } for hit in response["hits"]["hits"]]
+        # Combine results using rank fusion
+        fused_results = rank_fusion([vector_results, keyword_results])
+
+        # Return top_n results
+        return fused_results[:top_n]
 
     except Exception as e:
-        print(f"Search error: {str(e)}")
-        return []
+        print(f"Rank fusion search error: {str(e)}")
+        # Fallback to regular hybrid search if rank fusion fails
+        try:
+            hybrid_query = _create_hybrid_query(query, top_n)
+            client = OpenSearch(
+                hosts=[{'host': os_endpoint.replace("https://", ""), 'port': 443}],
+                http_auth=auth,
+                use_ssl=True,
+                verify_certs=True,
+                connection_class=RequestsHttpConnection,
+                timeout=30
+            )
+            return execute_search(client, os_index, hybrid_query)
+        except:
+            return []
 
 
 def _rerank_documents(query, documents, top_n):
@@ -169,9 +279,9 @@ def _rerank_documents(query, documents, top_n):
 
 
 def enhanced_search(query: str, top_n: int, os_endpoint: str, os_index: str) -> List[Dict]:
-    """Hybrid search with reranking"""
-    # 1. Initial search
-    raw_results = search(query, top_n * 2, os_endpoint, os_index)  # Get extra results
+    """Enhanced search with rank fusion and reranking"""
+    # 1. Rank fusion search
+    raw_results = rank_fusion_search(query, top_n * 2, os_endpoint, os_index)  # Get extra results for reranking
     results = []
     for hit in raw_results:
         result = {
@@ -250,7 +360,7 @@ def handle_contextual_retrieval(query, model_id, connection_id, apigw_management
     language = os.environ.get('RESPONSE_LANGUAGE', 'English')
 
     try:
-        # Get context from enhanced search
+        # Get context from enhanced search (now with rank fusion)
         context_results = enhanced_search(query, 5, os_endpoint, os_index)
 
         # Extract sources for citation tracking
@@ -280,7 +390,7 @@ def handle_contextual_retrieval(query, model_id, connection_id, apigw_management
         Provide your answer by only using information from the given context.
         If the information to answer the question is not in the context, say that you don't have enough information.
         Include citation numbers [1], [2], etc. when referring to information from specific sources.
-        Answer in Korean."""
+        Answer in {language}."""
 
         # Create Bedrock client for streaming
         bedrock_client = boto3.client('bedrock-runtime', region_name=region)
